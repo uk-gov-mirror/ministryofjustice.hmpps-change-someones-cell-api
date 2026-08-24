@@ -2,7 +2,6 @@ package uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock
 
 import com.github.tomakehurst.wiremock.WireMockServer
 import com.github.tomakehurst.wiremock.client.WireMock.aResponse
-import com.github.tomakehurst.wiremock.client.WireMock.equalTo
 import com.github.tomakehurst.wiremock.client.WireMock.get
 import com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo
 import org.junit.jupiter.api.extension.AfterAllCallback
@@ -68,32 +67,6 @@ class WhereaboutsApiMockServer : WireMockServer(WIREMOCK_PORT) {
             .withHeader("Content-Type", "application/json")
             .withBody("""{"status":404,"developerMessage":"Cell move reason not found"}""")
             .withStatus(404),
-        ),
-    )
-  }
-
-  /**
-   * One page of the keyset export, matched on the cursor so a walk can be scripted page by page.
-   * An empty [rows] is the terminator page. Each row is (bookingId, bedAssignmentSequence,
-   * caseNoteId) - serialised with whereabouts' own `bedAssignmentsSequence` misspelling.
-   */
-  fun stubGetCellMoveReasonsPage(
-    lastBookingId: Long,
-    lastBedAssignmentSequence: Int,
-    rows: List<Triple<Long, Int, Long>>,
-  ) {
-    val body = rows.joinToString(",\n") { (bookingId, sequence, caseNoteId) ->
-      """{"bookingId": $bookingId, "bedAssignmentsSequence": $sequence, "caseNoteId": $caseNoteId}"""
-    }
-    stubFor(
-      get(urlPathEqualTo("/cell/cell-move-reasons"))
-        .withQueryParam("lastBookingId", equalTo(lastBookingId.toString()))
-        .withQueryParam("lastBedAssignmentSequence", equalTo(lastBedAssignmentSequence.toString()))
-        .willReturn(
-          aResponse()
-            .withHeader("Content-Type", "application/json")
-            .withBody("""{"cellMoveReasons": [$body]}""")
-            .withStatus(200),
         ),
     )
   }

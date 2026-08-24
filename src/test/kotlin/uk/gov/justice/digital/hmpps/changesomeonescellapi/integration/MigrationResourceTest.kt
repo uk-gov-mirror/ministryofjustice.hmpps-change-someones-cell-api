@@ -13,16 +13,15 @@ import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.C
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.HmppsAuthApiExtension.Companion.hmppsAuth
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.PrisonApiExtension.Companion.prisonApi
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.PrisonerSearchExtension.Companion.prisonerSearch
-import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.WhereaboutsApiExtension.Companion.whereaboutsApi
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.jpa.CellMovementNomisEntity
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.jpa.repository.CellMovementNomisRepository
 import java.time.LocalDateTime
 import java.util.UUID
 
 /**
- * The one-off backfill (MAPA-304): the link sweep out of whereabouts, the enrichment pass, and the
- * reconciliation counts. The properties that matter most here are the idempotency ones - a re-run
- * must neither duplicate nor clobber - and that the prison-api fallback stays out of the read path.
+ * The one-off backfill (MAPA-304): the enrichment pass and the reconciliation counts. The
+ * properties that matter most here are the idempotency ones - a re-run must neither duplicate nor
+ * clobber - and that the prison-api fallback stays out of the read path.
  */
 class MigrationResourceTest : IntegrationTestBase() {
 
@@ -38,21 +37,6 @@ class MigrationResourceTest : IntegrationTestBase() {
   }
 
   // -- security ---------------------------------------------------------------------------------
-
-  @Test
-  fun `link-sweep returns 401 without a token`() {
-    webTestClient.post().uri("/migration/cell-move-reasons/link-sweep")
-      .exchange()
-      .expectStatus().isUnauthorized
-  }
-
-  @Test
-  fun `link-sweep returns 403 without the sync role`() {
-    webTestClient.post().uri("/migration/cell-move-reasons/link-sweep")
-      .headers(setAuthorisation(roles = listOf("ROLE_CELL_MOVEMENTS__RW")))
-      .exchange()
-      .expectStatus().isForbidden
-  }
 
   @Test
   fun `enrich returns 401 without a token`() {
@@ -82,107 +66,6 @@ class MigrationResourceTest : IntegrationTestBase() {
       .headers(setAuthorisation(roles = listOf("ROLE_CELL_MOVEMENTS__RO")))
       .exchange()
       .expectStatus().isForbidden
-  }
-
-  // -- link sweep -------------------------------------------------------------------------------
-
-  @Test
-  fun `sweeps every whereabouts page into cell_movement_nomis`() {
-    whereaboutsApi.stubGetCellMoveReasonsPage(0, 0, listOf(Triple(100L, 1, 11L), Triple(100L, 2, 12L)))
-    whereaboutsApi.stubGetCellMoveReasonsPage(100, 2, listOf(Triple(200L, 1, 13L)))
-
-    sweep(pageSize = 2)
-      .expectStatus().isOk
-      .expectBody()
-      .jsonPath("$.pagesFetched").isEqualTo(2)
-      .jsonPath("$.rowsSeen").isEqualTo(3)
-      .jsonPath("$.rowsInserted").isEqualTo(3)
-      .jsonPath("$.nextCursor.lastBookingId").isEqualTo(200)
-      .jsonPath("$.nextCursor.lastBedAssignmentSequence").isEqualTo(1)
-      // The second page was short, which cannot happen with more to come.
-      .jsonPath("$.complete").isEqualTo(true)
-
-    val keys = cellMovementNomisRepository.findAll().map { it.bookingId to it.bedAssignmentSequence }
-    assertThat(keys).containsExactlyInAnyOrder(100L to 1, 100L to 2, 200L to 1)
-    assertThat(cellMovementNomisRepository.findAll().map { it.caseNoteLegacyId }).containsExactlyInAnyOrder(11L, 12L, 13L)
-  }
-
-  @Test
-  fun `stops at maxPages and resumes from the returned cursor`() {
-    whereaboutsApi.stubGetCellMoveReasonsPage(0, 0, listOf(Triple(100L, 1, 11L), Triple(100L, 2, 12L)))
-    whereaboutsApi.stubGetCellMoveReasonsPage(100, 2, listOf(Triple(200L, 1, 13L), Triple(300L, 1, 14L)))
-    whereaboutsApi.stubGetCellMoveReasonsPage(300, 1, emptyList())
-
-    sweep(pageSize = 2, maxPages = 1)
-      .expectStatus().isOk
-      .expectBody()
-      .jsonPath("$.pagesFetched").isEqualTo(1)
-      .jsonPath("$.complete").isEqualTo(false)
-      .jsonPath("$.nextCursor.lastBookingId").isEqualTo(100)
-      .jsonPath("$.nextCursor.lastBedAssignmentSequence").isEqualTo(2)
-
-    sweep(pageSize = 2, lastBookingId = 100, lastBedAssignmentSequence = 2)
-      .expectStatus().isOk
-      .expectBody()
-      .jsonPath("$.rowsInserted").isEqualTo(2)
-      .jsonPath("$.complete").isEqualTo(true)
-
-    // Nothing lost across the interruption: the union of the two calls is the whole export.
-    assertThat(cellMovementNomisRepository.count()).isEqualTo(4)
-  }
-
-  @Test
-  fun `re-running the sweep neither duplicates nor clobbers read-path enrichment`() {
-    // (100, 1) has already been migrated and fully enriched by the read path. The sweep sees it
-    // again in the export - it must skip it untouched, not reset it to a bare link.
-    cellMovementNomisRepository.save(
-      CellMovementNomisEntity(
-        bookingId = 100L,
-        bedAssignmentSequence = 1,
-        caseNoteLegacyId = 11L,
-        prisonerNumber = "A1234BC",
-        reasonCode = "BEH",
-        commentText = "Already resolved by a read",
-        caseNoteUuid = UUID.fromString("6bc0e6a9-7e0f-4a4a-9c62-0d0a0b1d1234"),
-        occurredAt = LocalDateTime.parse("2026-08-01T09:55:00"),
-        enrichedAt = LocalDateTime.parse("2026-08-10T12:00:00"),
-      ),
-    )
-    whereaboutsApi.stubGetCellMoveReasonsPage(0, 0, listOf(Triple(100L, 1, 11L), Triple(100L, 2, 12L)))
-    whereaboutsApi.stubGetCellMoveReasonsPage(100, 2, emptyList())
-
-    sweep(pageSize = 2)
-      .expectStatus().isOk
-      .expectBody()
-      .jsonPath("$.rowsSeen").isEqualTo(2)
-      .jsonPath("$.rowsInserted").isEqualTo(1)
-      .jsonPath("$.complete").isEqualTo(true)
-
-    // The identical sweep again: nothing new, nothing changed.
-    sweep(pageSize = 2)
-      .expectStatus().isOk
-      .expectBody()
-      .jsonPath("$.rowsInserted").isEqualTo(0)
-
-    assertThat(cellMovementNomisRepository.count()).isEqualTo(2)
-    val enriched = cellMovementNomisRepository.findAll().single { it.bookingId == 100L && it.bedAssignmentSequence == 1 }
-    assertThat(enriched.commentText).isEqualTo("Already resolved by a read")
-    assertThat(enriched.reasonCode).isEqualTo("BEH")
-    assertThat(enriched.prisonerNumber).isEqualTo("A1234BC")
-    assertThat(enriched.enrichedAt).isEqualTo(LocalDateTime.parse("2026-08-10T12:00:00"))
-  }
-
-  @Test
-  fun `an empty table at whereabouts completes immediately`() {
-    whereaboutsApi.stubGetCellMoveReasonsPage(0, 0, emptyList())
-
-    sweep()
-      .expectStatus().isOk
-      .expectBody()
-      .jsonPath("$.pagesFetched").isEqualTo(1)
-      .jsonPath("$.rowsSeen").isEqualTo(0)
-      .jsonPath("$.rowsInserted").isEqualTo(0)
-      .jsonPath("$.complete").isEqualTo(true)
   }
 
   // -- enrichment -------------------------------------------------------------------------------
@@ -394,19 +277,6 @@ class MigrationResourceTest : IntegrationTestBase() {
   }
 
   // -- helpers ----------------------------------------------------------------------------------
-
-  private fun sweep(
-    lastBookingId: Long = 0,
-    lastBedAssignmentSequence: Int = 0,
-    pageSize: Int = 1000,
-    maxPages: Int = 10,
-  ) = webTestClient.post()
-    .uri(
-      "/migration/cell-move-reasons/link-sweep?lastBookingId=$lastBookingId" +
-        "&lastBedAssignmentSequence=$lastBedAssignmentSequence&pageSize=$pageSize&maxPages=$maxPages",
-    )
-    .headers(setAuthorisation(roles = syncRole))
-    .exchange()
 
   private fun enrich(
     lastBookingId: Long = 0,

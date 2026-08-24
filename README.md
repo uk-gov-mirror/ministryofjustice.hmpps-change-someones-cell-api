@@ -108,43 +108,50 @@ docker run -e HMPPS_AUTH_URL="https://sign-in-dev.hmpps.service.justice.gov.uk/a
 
 ## One-off backfill of whereabouts CELL_MOVE_REASON (MAPA-304)
 
-The `/migration/cell-move-reasons/*` endpoints drain whereabouts-api's `CELL_MOVE_REASON` table
-into `cell_movement_nomis`, fully enriched. They are operator-driven and chunked: each call does a
-bounded amount of work and returns a cursor, and the loop below - with its `sleep` - is both the
-scheduler and the rate limit on case-notes. Everything is idempotent, so a timed-out call, a
-crash, or a repeat costs nothing; re-run from the last cursor (or from the start - inserts skip
-existing rows and never overwrite enrichment).
+### The link sweep is complete
 
-Run the final sweep only once the UI's writes have moved to this API (MAPA-280) and the source
-table is frozen; rows whereabouts gains mid-run below the cursor would otherwise be missed
-(live moves self-migrate through the read path, so this only matters for the very last sweep).
+Every row of whereabouts-api's `CELL_MOVE_REASON` is in `cell_movement_nomis`. The sweep
+reconciled against whereabouts' own `select count(*)` in all three environments - dev 1,460,
+preprod 3,481,920, prod 3,516,520 - and the source table was re-counted afterwards and had not
+moved, proving nothing appeared below the cursor mid-run. The `/link-sweep` endpoint and
+whereabouts' `/cell/cell-move-reasons` export that fed it were both removed with MAPA-282.
 
-Prerequisites: a client-credentials token with `ROLE_CELL_MOVEMENTS__SYNC__RW`, and - for the
-enrich pass - `ROLE_VIEW_PRISONER_DATA` on this service's own client for the prison-api
-historic-booking fallback.
+Nothing further is needed from whereabouts. The enrichment pass below reads case notes through the
+`case_note_legacy_id` the sweep already copied across.
+
+### Enrichment
+
+`/migration/cell-move-reasons/enrich` resolves each migrated row's case note - reason code,
+explanation, timestamp - onto it, once. Operator-driven and chunked: each call does a bounded
+amount of work and returns a cursor, and the loop below - with its `sleep` - is both the scheduler
+and the rate limit on case-notes. Idempotent, so a timed-out call, a crash or a repeat costs
+nothing; re-run from the last cursor, or from the start, and rows already enriched are skipped.
+
+Sizing: one case-notes GET per unenriched row, sequentially. In prod that is ~3.5M calls at
+roughly 25-50 req/s, so 20-40 hours. Agree it with the offender-case-notes team before running.
+
+Prerequisites: a client-credentials token with `ROLE_CELL_MOVEMENTS__SYNC__RW`, and
+`ROLE_VIEW_PRISONER_DATA` on this service's own client for the prison-api historic-booking
+fallback.
 
 ```bash
 API=https://change-someones-cell-api-dev.hmpps.service.justice.gov.uk
 TOKEN=... # client credentials grant
 
-# Pass 1: copy the links
 CURSOR="lastBookingId=0&lastBedAssignmentSequence=0"
 while :; do
-  R=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/migration/cell-move-reasons/link-sweep?$CURSOR")
+  R=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/migration/cell-move-reasons/enrich?$CURSOR&batchSize=50")
   echo "$R"
   [ "$(jq -r .complete <<<"$R")" = true ] && break
   CURSOR="lastBookingId=$(jq -r .nextCursor.lastBookingId <<<"$R")&lastBedAssignmentSequence=$(jq -r .nextCursor.lastBedAssignmentSequence <<<"$R")"
   sleep 1
 done
 
-# Pass 2: enrich (same loop shape against /enrich, default batchSize=50)
-
-# Then reconcile
 curl -s -H "Authorization: Bearer $TOKEN" "$API/migration/cell-move-reasons/status" | jq .
 ```
 
-Reconciliation: `totalRows` must equal whereabouts' `select count(*) from cell_move_reason`
-(ask Activities & Appointments to run it). A second link sweep from `0/0` reporting
-`rowsInserted: 0` proves nothing appeared mid-run. Record `sampleUnresolvedBookingIds` - bookings
-neither prisoner-search nor prison-api can resolve - on the ticket: that is the "explicitly
-accounted for" list. These endpoints are deleted with the whereabouts decommission (MAPA-282).
+A long run needs its token refreshed - it expires well inside the wall clock above.
+
+Record `sampleUnresolvedBookingIds` - bookings neither prisoner-search nor prison-api can resolve -
+on the ticket: that is the "explicitly accounted for" list. These endpoints are deleted once
+enrichment has run to completion.

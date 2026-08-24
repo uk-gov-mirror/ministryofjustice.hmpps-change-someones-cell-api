@@ -4,101 +4,43 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.client.PrisonApiClient
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.client.PrisonerSearchClient
-import uk.gov.justice.digital.hmpps.changesomeonescellapi.client.WhereaboutsApiClient
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.EnrichResult
-import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.LinkSweepResult
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.MigrationCursor
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.MigrationStatus
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.jpa.CellMovementNomisEntity
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.jpa.repository.CellMovementNomisRepository
 
 /**
- * The one-off backfill (MAPA-304): sweeps whereabouts-api's CELL_MOVE_REASON table into
- * [cell_movement_nomis][CellMovementNomisEntity] and enriches every row, so that once the counts
- * reconcile no read ever touches whereabouts again and its table can be dropped.
+ * The one-off backfill (MAPA-304): enriches the rows of
+ * [cell_movement_nomis][CellMovementNomisEntity] from their case notes, so that no read ever
+ * touches whereabouts again and its table can be dropped.
  *
- * Two separately-resumable passes, each driven chunk by chunk from MigrationResource by an
- * operator - the curl loop is the scheduler and the rate limiter, which is also why everything
- * here runs synchronously on the request thread (the downstream WebClients are request-scoped and
- * cannot be used from a background job).
+ * The link sweep that populated the table from whereabouts-api's CELL_MOVE_REASON export is done -
+ * it completed and reconciled against whereabouts' own `count(*)` in every environment, and was
+ * removed with the export it read (MAPA-282). Enrichment never used whereabouts: it resolves each
+ * row's case note through the `case_note_legacy_id` the sweep already copied across.
  *
- * Not `@Transactional`: each row's write commits alone (the insert via the repository's own
- * per-row transaction, the enrichment via saveAndFlush), so a call cut off by a timeout loses
- * nothing and a re-run from the same cursor is harmless.
+ * Driven chunk by chunk from MigrationResource by an operator - the curl loop is the scheduler and
+ * the rate limiter, which is also why everything here runs synchronously on the request thread (the
+ * downstream WebClients are request-scoped and cannot be used from a background job).
  *
- * Two races are accepted by design:
- *  - a row the read path enriches between our select and our save is written twice with the same
- *    values - both writers derive the same facts from the same case note, so last-writer-wins is
- *    benign;
- *  - a row whereabouts gains *below* the sweep cursor mid-run would be missed by the sweep, but
- *    live moves migrate themselves through the read path, and since MAPA-280 nothing writes to
- *    whereabouts at all - the sweep runs against a frozen table.
+ * Not `@Transactional`: each row's write commits alone (via saveAndFlush), so a call cut off by a
+ * timeout loses nothing and a re-run from the same cursor is harmless.
+ *
+ * One race is accepted by design: a row the read path enriches between our select and our save is
+ * written twice with the same values - both writers derive the same facts from the same case note,
+ * so last-writer-wins is benign.
  */
 @Service
 class CellMoveReasonMigrationService(
   private val cellMovementNomisRepository: CellMovementNomisRepository,
-  private val whereaboutsApiClient: WhereaboutsApiClient,
   private val prisonerSearchClient: PrisonerSearchClient,
   private val prisonApiClient: PrisonApiClient,
   private val enricher: CellMovementNomisEnricher,
 ) {
 
   /**
-   * Pass 1: copy the links. Walks up to [maxPages] pages of whereabouts' keyset export and
-   * inserts each row's link, skipping - never overwriting - rows already migrated. An empty page
-   * is the export's only terminator; a short page is treated as complete too, which saves the
-   * final call without changing correctness (a re-run confirms with the empty page).
-   */
-  fun sweepLinks(cursor: MigrationCursor, pageSize: Int, maxPages: Int): LinkSweepResult {
-    var lastBookingId = cursor.lastBookingId
-    var lastBedAssignmentSequence = cursor.lastBedAssignmentSequence
-    var pagesFetched = 0
-    var rowsSeen = 0
-    var rowsInserted = 0
-    var complete = false
-
-    while (pagesFetched < maxPages) {
-      val page = whereaboutsApiClient.getCellMoveReasons(lastBookingId, lastBedAssignmentSequence, pageSize)
-      pagesFetched++
-      if (page.isEmpty()) {
-        complete = true
-        break
-      }
-
-      rowsSeen += page.size
-      rowsInserted += page.sumOf {
-        cellMovementNomisRepository.insertLinkIfAbsent(it.bookingId, it.bedAssignmentsSequence, it.caseNoteId)
-      }
-      page.last().let {
-        lastBookingId = it.bookingId
-        lastBedAssignmentSequence = it.bedAssignmentsSequence
-      }
-      log.info(
-        "Link sweep page {}: {} rows, {} new, cursor now ({}, {})",
-        pagesFetched,
-        page.size,
-        rowsInserted,
-        lastBookingId,
-        lastBedAssignmentSequence,
-      )
-
-      if (page.size < pageSize) {
-        complete = true
-        break
-      }
-    }
-
-    return LinkSweepResult(
-      pagesFetched = pagesFetched,
-      rowsSeen = rowsSeen,
-      rowsInserted = rowsInserted,
-      nextCursor = MigrationCursor(lastBookingId, lastBedAssignmentSequence),
-      complete = complete,
-    )
-  }
-
-  /**
-   * Pass 2: enrich a batch of rows still awaiting enrichment, in primary key order after the
+   * Enrich a batch of rows still awaiting enrichment, in primary key order after the
    * cursor. Prisoner numbers are resolved with one batched prisoner-search call, then - only for
    * bookings the index no longer knows - prison-api's booking lookup, the one-off concession the
    * read path deliberately never makes. A booking unknown to both sources is reported in

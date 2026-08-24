@@ -3,7 +3,7 @@ package uk.gov.justice.digital.hmpps.changesomeonescellapi.dto
 import io.swagger.v3.oas.annotations.media.Schema
 
 /**
- * Where a sweep or enrichment pass got to. Feed it back as the next call's `lastBookingId` /
+ * Where an enrichment pass got to. Feed it back as the next call's `lastBookingId` /
  * `lastBedAssignmentSequence` to continue from there; `(0, 0)` starts from the beginning.
  */
 @Schema(description = "The keyset cursor a chunked migration call finished at")
@@ -13,24 +13,6 @@ data class MigrationCursor(
 
   @get:Schema(description = "The bed assignment sequence of the last row processed", example = "3")
   val lastBedAssignmentSequence: Int,
-)
-
-@Schema(description = "The result of one chunk of the link sweep")
-data class LinkSweepResult(
-  @get:Schema(description = "Pages fetched from whereabouts in this call")
-  val pagesFetched: Int,
-
-  @get:Schema(description = "Rows the pages contained")
-  val rowsSeen: Int,
-
-  @get:Schema(description = "Rows newly inserted - rows already migrated (by an earlier sweep or the read-through) are skipped, never overwritten")
-  val rowsInserted: Int,
-
-  @get:Schema(description = "Where this call got to - pass back to continue")
-  val nextCursor: MigrationCursor,
-
-  @get:Schema(description = "True when whereabouts returned an empty page: the export is exhausted")
-  val complete: Boolean,
 )
 
 @Schema(description = "The result of one chunk of the enrichment pass")
@@ -58,14 +40,14 @@ data class EnrichResult(
 )
 
 /**
- * The reconciliation identities: [totalRows] must equal whereabouts' `count(*)` once the sweep is
- * complete; `enrichedWithNote + enrichedNoteGone + unenriched == totalRows`; and
+ * The reconciliation identities: [totalRows] equalled whereabouts' `count(*)` when the link sweep
+ * completed; `enrichedWithNote + enrichedNoteGone + unenriched == totalRows`; and
  * `unenriched - awaitingPrisonerNumber` is the transiently-failed remainder a re-run of the
  * enrichment pass will retry.
  */
 @Schema(description = "Migration progress and the reconciliation counts")
 data class MigrationStatus(
-  @get:Schema(description = "All migrated rows - compare with whereabouts' own count(*)")
+  @get:Schema(description = "All migrated rows")
   val totalRows: Long,
 
   @get:Schema(description = "Rows enriched, whether or not their case note still existed")

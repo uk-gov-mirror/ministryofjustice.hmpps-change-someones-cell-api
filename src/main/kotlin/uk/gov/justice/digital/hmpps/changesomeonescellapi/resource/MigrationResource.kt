@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.config.Roles
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.EnrichResult
-import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.LinkSweepResult
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.MigrationCursor
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.MigrationStatus
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.service.CellMoveReasonMigrationService
@@ -30,70 +29,22 @@ import uk.gov.justice.hmpps.kotlin.common.ErrorResponse
  * scheduler - drives it to completion. Idempotent throughout, so a timed-out or repeated call
  * costs nothing.
  *
- * **Temporary.** These endpoints exist to drain whereabouts-api's CELL_MOVE_REASON table and
- * prove the counts reconcile; they are deleted with the whereabouts decommission (MAPA-282).
+ * The link sweep that drained whereabouts-api's CELL_MOVE_REASON table has completed and
+ * reconciled in every environment, and went with the export it read (MAPA-282). What remains is
+ * the enrichment pass, which reads case-notes and never touched whereabouts.
+ *
+ * **Temporary.** These endpoints are deleted once enrichment has run to completion.
  */
 @RestController
 @Validated
 @RequestMapping("/migration/cell-move-reasons", produces = [MediaType.APPLICATION_JSON_VALUE])
 @Tag(
   name = "Migration (temporary)",
-  description = "Operator-driven backfill of whereabouts-api's cell move reasons. Dies with the whereabouts decommission.",
+  description = "Operator-driven backfill of whereabouts-api's cell move reasons. Dies once enrichment completes.",
 )
 class MigrationResource(
   private val migrationService: CellMoveReasonMigrationService,
 ) {
-
-  @PostMapping("/link-sweep")
-  @PreAuthorize("hasRole('${Roles.CELL_MOVEMENTS_SYNC_RW}')")
-  @Operation(
-    summary = "Sweep a chunk of cell move reason links out of whereabouts",
-    description = "Walks up to maxPages pages of whereabouts' keyset export and copies each row's " +
-      "link into this service, skipping - never overwriting - rows already migrated by an earlier " +
-      "sweep or by the read-through. Returns where it got to; feed nextCursor back to continue, " +
-      "and loop until complete is true. Safe to repeat: re-running any chunk inserts nothing new. " +
-      "Requires role ROLE_CELL_MOVEMENTS__SYNC__RW",
-    responses = [
-      ApiResponse(
-        responseCode = "200",
-        description = "The chunk was swept",
-        content = [Content(mediaType = "application/json", schema = Schema(implementation = LinkSweepResult::class))],
-      ),
-      ApiResponse(
-        responseCode = "400",
-        description = "A parameter is out of bounds",
-        content = [Content(mediaType = "application/json", schema = Schema(implementation = ErrorResponse::class))],
-      ),
-      ApiResponse(
-        responseCode = "401",
-        description = "Unauthorized to access this endpoint",
-        content = [Content(mediaType = "application/json", schema = Schema(implementation = ErrorResponse::class))],
-      ),
-      ApiResponse(
-        responseCode = "403",
-        description = "Missing required role. Requires the ROLE_CELL_MOVEMENTS__SYNC__RW role",
-        content = [Content(mediaType = "application/json", schema = Schema(implementation = ErrorResponse::class))],
-      ),
-    ],
-  )
-  fun sweepLinks(
-    @Parameter(description = "Continue strictly after this booking id", example = "0")
-    @RequestParam(defaultValue = "0") lastBookingId: Long,
-    @Parameter(description = "Continue strictly after this bed assignment sequence within that booking", example = "0")
-    @RequestParam(defaultValue = "0") lastBedAssignmentSequence: Int,
-    @Parameter(description = "Rows per whereabouts page - whereabouts clamps to the same bounds", example = "1000")
-    @RequestParam(defaultValue = "1000")
-    @Min(1)
-    @Max(1000) pageSize: Int,
-    @Parameter(description = "Pages to fetch in this call, bounding its duration", example = "10")
-    @RequestParam(defaultValue = "10")
-    @Min(1)
-    @Max(20) maxPages: Int,
-  ): LinkSweepResult = migrationService.sweepLinks(
-    MigrationCursor(lastBookingId, lastBedAssignmentSequence),
-    pageSize,
-    maxPages,
-  )
 
   @PostMapping("/enrich")
   @PreAuthorize("hasRole('${Roles.CELL_MOVEMENTS_SYNC_RW}')")
@@ -148,8 +99,9 @@ class MigrationResource(
   @PreAuthorize("hasRole('${Roles.CELL_MOVEMENTS_SYNC_RW}')")
   @Operation(
     summary = "Report migration progress and the reconciliation counts",
-    description = "The counts that prove convergence: totalRows against whereabouts' own count(*), " +
-      "the enriched/unenriched split, and a sample of booking ids no source could resolve - the " +
+    description = "The counts that prove convergence: totalRows, which the completed link sweep " +
+      "reconciled against whereabouts' own count(*), the enriched/unenriched split, and a sample of " +
+      "booking ids no source could resolve - the " +
       "\"explicitly accounted for\" list to record on the migration ticket. " +
       "Requires role ROLE_CELL_MOVEMENTS__SYNC__RW",
     responses = [
