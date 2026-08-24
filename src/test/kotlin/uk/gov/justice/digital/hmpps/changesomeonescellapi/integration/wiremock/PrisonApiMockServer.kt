@@ -86,16 +86,18 @@ class PrisonApiMockServer : WireMockServer(WIREMOCK_PORT) {
   }
 
   /**
-   * The cell swap. Note prison-api resolves the CSWAP location itself from the booking's agency, so
-   * the request carries no location - only the booking in the path.
+   * The cell swap. Since MAPA-316 this is the ordinary cell move endpoint with the prison's CSWAP
+   * key, so it is stubbed on the same path as [stubMoveToCell] - the location is in the URL rather
+   * than being resolved by prison-api from the booking's agency.
    */
   fun stubMoveToCellSwap(
     bookingId: Long,
+    locationKey: String = "MDI-CSWAP",
     assignedLivingUnitDesc: String = "MDI-CSWAP",
     bedAssignmentHistorySequence: Int? = 3,
   ) {
     stubFor(
-      put(urlPathEqualTo("/api/bookings/$bookingId/move-to-cell-swap")).willReturn(
+      put(urlPathEqualTo("/api/bookings/$bookingId/living-unit/$locationKey")).willReturn(
         aResponse()
           .withHeader("Content-Type", "application/json")
           .withBody(
@@ -114,10 +116,15 @@ class PrisonApiMockServer : WireMockServer(WIREMOCK_PORT) {
     )
   }
 
-  /** e.g. 404 when the prison has no CSWAP location configured. */
-  fun stubMoveToCellSwapFails(bookingId: Long, status: Int, body: String = """{"status":$status}""") {
+  /** e.g. 404 when the prison has no CSWAP location configured, or it is described unexpectedly. */
+  fun stubMoveToCellSwapFails(
+    bookingId: Long,
+    status: Int,
+    locationKey: String = "MDI-CSWAP",
+    body: String = """{"status":$status}""",
+  ) {
     stubFor(
-      put(urlPathEqualTo("/api/bookings/$bookingId/move-to-cell-swap")).willReturn(
+      put(urlPathEqualTo("/api/bookings/$bookingId/living-unit/$locationKey")).willReturn(
         aResponse()
           .withHeader("Content-Type", "application/json")
           .withBody(body)

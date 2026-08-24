@@ -25,65 +25,68 @@ class PrisonApiClient(
    * Moves the booking to [locationKey], which is the full location key such as MDI-1-1-015 -
    * prison-api matches it against the NOMIS internal location description, which is the same
    * string LIP calls a key.
+   */
+  fun moveToCell(bookingId: Long, locationKey: String, reasonCode: String): CellMoveResult = putLivingUnit(
+    bookingId,
+    locationKey,
+    reasonCode,
+    // The cell is full, inactive, not a cell or reception, or in another prison. prison-api reports
+    // all of these as one 400, so its message is passed through rather than guessed at.
+    rejectedBy = { CellNotAvailableException(it) },
+  )
+
+  /**
+   * Moves the booking out to the prison's cell swap location, freeing the cell.
    *
-   * There is deliberately **no retry**. whereabouts-api applied `.retry(3)` to this call, which
-   * retries a non-idempotent write on any error including 4xx, and could move a prisoner more
-   * than once.
+   * This is [moveToCell] with the prison's `PRISON_ID-CSWAP` key, which the caller derives and
+   * stores. It exists as its own method only because a failure here means something different -
+   * see [rejectedBy] below - and because the caller reads better for it.
+   *
+   * It used to call prison-api's `move-to-cell-swap`, which took no location and resolved CSWAP
+   * from the booking's own agency. That endpoint was deprecated, and MAPA-316 widened the ordinary
+   * cell move to accept a cell swap destination so it could go. The one thing that changes with it:
+   * prison-api no longer resolves the location for us, so a prison whose CSWAP location is not
+   * described `PRISON_ID-CSWAP` now fails here rather than being silently corrected. Every CSWAP
+   * location is described that way - it is a top-level location with code CSWAP - but that is a
+   * NOMIS convention rather than a guarantee, which is what [CellSwapUnavailableException] is for.
+   *
+   * [reasonCode] is required now that this is the ordinary cell move; the swap endpoint used to
+   * default it to ADM. The caller has always sent it explicitly, so nothing changes.
+   */
+  fun moveToCellSwap(bookingId: Long, locationKey: String, reasonCode: String): CellMoveResult = putLivingUnit(
+    bookingId,
+    locationKey,
+    reasonCode,
+    // Not CellNotAvailable: there is no destination cell here and no capacity check - CSWAP is
+    // deliberately uncapped. A 400 or 404 means the prison has no CSWAP location configured, or it
+    // is not described the way we derived. That is an estate configuration fault, not something the
+    // user can fix by picking a different cell.
+    rejectedBy = { CellSwapUnavailableException(it) },
+  )
+
+  /**
+   * The one call that moves a booking. Shared by the ordinary move and the cell swap, which differ
+   * only in the key they send and in what a rejection means.
+   *
+   * There is deliberately **no retry**. whereabouts-api applied `.retry(3)` here, which retries a
+   * non-idempotent write on any error including 4xx, and could move a prisoner more than once.
    *
    * `lockTimeout=true` asks NOMIS to take a row lock and give up after 10 seconds rather than
    * blocking, which is what turns "someone has this prisoner open in P-NOMIS" into a 423 we can
    * show the user.
    */
-  fun moveToCell(bookingId: Long, locationKey: String, reasonCode: String): CellMoveResult = translatingErrors(
-    // The cell is full, inactive, not a cell or reception, or in another prison. prison-api reports
-    // all of these as one 400, so its message is passed through rather than guessed at.
-    rejectedBy = { CellNotAvailableException(it) },
-  ) {
+  private fun putLivingUnit(
+    bookingId: Long,
+    locationKey: String,
+    reasonCode: String,
+    rejectedBy: (String?) -> Exception,
+  ): CellMoveResult = translatingErrors(rejectedBy) {
     webClient
       .put()
       .uri(
         "/api/bookings/{bookingId}/living-unit/{locationKey}?reasonCode={reasonCode}&lockTimeout=true",
         mapOf("bookingId" to bookingId, "locationKey" to locationKey, "reasonCode" to reasonCode),
       )
-      .retrieve()
-      .bodyToMono<CellMoveResult>()
-      .block()!!
-  }
-
-  /**
-   * Moves the booking out to the prison's cell swap location, freeing the cell.
-   *
-   * Takes no location on purpose: prison-api resolves CSWAP from the booking's own agency. That is
-   * a fact about this endpoint, not about our service, so it stays in here.
-   *
-   * **This calls an endpoint prison-api has marked `@Deprecated`**, documented "this endpoint will
-   * be removed in future releases". Containing it in this method is the point — when it goes, the
-   * replacement is to call [moveToCell] with the prison's `{prisonId}-CSWAP` key, which the service
-   * already derives and stores, and nothing above this class changes.
-   *
-   * Syscon cannot remove it yet: `MovementUpdateService.moveToCellOrReception` gates on
-   * `isActiveCellWithSpace() || isActiveReceptionWithSpace()` and CSWAP is a WING, so the ordinary
-   * endpoint rejects it with a 400 before reaching `BookingService.validateUpdateLivingUnit` —
-   * which already has an `isCellSwap()` exemption waiting for it. That outer gate has to move first.
-   *
-   * [reasonCode] is sent explicitly rather than relying on the endpoint's `ADM` default, so that
-   * what NOMIS records and what we record cannot drift apart, and so the eventual switch to
-   * [moveToCell] — where the reason is required — is a no-op.
-   *
-   * No retry, for the same non-idempotency reason as [moveToCell]. No `dateTime` either: NOMIS
-   * clocks it, and sending ours would invite skew into the bed assignment history.
-   */
-  fun moveToCellSwap(bookingId: Long, reasonCode: String): CellMoveResult = translatingErrors(
-    // Not CellNotAvailable: there is no destination cell here and no capacity check — CSWAP is
-    // deliberately uncapped. A 400 or 404 means the prison has no CSWAP location configured, or
-    // more than one. That is an estate configuration fault, not something the user can fix by
-    // picking a different cell.
-    rejectedBy = { CellSwapUnavailableException(it) },
-  ) {
-    webClient
-      .put()
-      .uri("/api/bookings/{bookingId}/move-to-cell-swap", mapOf("bookingId" to bookingId))
-      .bodyValue(mapOf("reasonCode" to reasonCode))
       .retrieve()
       .bodyToMono<CellMoveResult>()
       .block()!!
@@ -111,11 +114,9 @@ class PrisonApiClient(
   }
 
   /**
-   * Shared so the two calls cannot drift. 423 is mapped for both even though prison-api hardcodes
-   * `lockTimeout=false` on the swap endpoint and so cannot currently return it there — it costs
-   * nothing and starts working the day the swap moves onto [moveToCell]. Note the flip side: with
-   * no lock timeout, a record open in P-NOMIS blocks rather than returning 423, so the failure mode
-   * on a swap today is latency, not a clean error.
+   * Shared so the two calls cannot drift. Both now go through the same endpoint with
+   * `lockTimeout=true`, so a record open in P-NOMIS is a 423 on a swap as well as on an ordinary
+   * move - it used to block instead, because the old swap endpoint hardcoded no lock timeout.
    */
   private fun <T> translatingErrors(rejectedBy: (String?) -> Exception, block: () -> T): T = try {
     block()

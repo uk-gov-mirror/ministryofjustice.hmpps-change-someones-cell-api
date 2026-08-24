@@ -103,13 +103,15 @@ class CellMovementService(
     val result = performInNomis(movement) {
       prisonApiClient.moveToCellSwap(
         bookingId = movement.bookingId,
+        locationKey = destination,
         reasonCode = CELL_SWAP_REASON_CODE,
       )
     }
 
-    // We derived the destination; prison-api resolved it for real. Prefer its answer, which covers
-    // a prison whose CSWAP location is not described the way we assumed - and re-resolve the UUID
-    // so it matches the key actually stored.
+    // Prefer the key prison-api reports over the one we derived, and re-resolve the UUID so it
+    // matches what is actually stored. Since MAPA-316 we send the key rather than letting prison-api
+    // resolve CSWAP from the booking's agency, so the two should now always agree - this stays as
+    // the cheap guard that keeps our record honest if they ever do not.
     result.assignedLivingUnitDesc?.takeIf { it != movement.toLocationKey }?.let { actualKey ->
       movement.toLocationKey = actualKey
       movement.toLocationId = locationsInsidePrisonApiClient.resolveKeys(setOf(actualKey))[actualKey]

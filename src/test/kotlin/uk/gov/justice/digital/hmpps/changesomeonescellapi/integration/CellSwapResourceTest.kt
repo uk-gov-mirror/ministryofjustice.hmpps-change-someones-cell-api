@@ -91,28 +91,25 @@ class CellSwapResourceTest : IntegrationTestBase() {
   }
 
   @Test
-  fun `sends the reason code explicitly rather than relying on prison-api's default`() {
+  fun `swaps through the ordinary cell move endpoint with the prison's CSWAP key`() {
     postSwap().expectStatus().isCreated
 
+    // MAPA-316: prison-api's move-to-cell-swap is deprecated, and the ordinary cell move now accepts
+    // a cell swap destination. We send the key rather than letting prison-api resolve it.
+    prisonApi.verify(0, putRequestedFor(urlMatching(".*/move-to-cell-swap.*")))
     val request = prisonApi.findAll(
-      putRequestedFor(urlPathEqualTo("/api/bookings/$BOOKING_ID/move-to-cell-swap")),
+      putRequestedFor(urlPathEqualTo("/api/bookings/$BOOKING_ID/living-unit/MDI-CSWAP")),
     ).single()
-    // prison-api defaults this to ADM, but that default lives in an endpoint it has already
-    // deprecated. Sending it keeps NOMIS's assignment reason and our record provably in step.
-    assertThat(request.bodyAsString).contains("\"reasonCode\":\"ADM\"")
-  }
-
-  @Test
-  fun `does not call the living-unit endpoint`() {
-    postSwap().expectStatus().isCreated
-
-    prisonApi.verify(0, putRequestedFor(urlMatching(".*/living-unit/.*")))
+    // Required now this is the ordinary move, where there is no ADM default to fall back on.
+    assertThat(request.queryParameter("reasonCode").firstValue()).isEqualTo("ADM")
+    // Cell swap gains the lock timeout the old endpoint hardcoded off, so it can now return 423.
+    assertThat(request.queryParameter("lockTimeout").firstValue()).isEqualTo("true")
   }
 
   @Test
   fun `derives the destination from the prisoner's own prison`() {
     prisonerSearch.stubGetPrisoner(PRISONER_NUMBER, bookingId = BOOKING_ID.toString(), prisonId = "LEI")
-    prisonApi.stubMoveToCellSwap(BOOKING_ID, assignedLivingUnitDesc = "LEI-CSWAP")
+    prisonApi.stubMoveToCellSwap(BOOKING_ID, locationKey = "LEI-CSWAP", assignedLivingUnitDesc = "LEI-CSWAP")
 
     postSwap()
       .expectStatus().isCreated
@@ -122,7 +119,8 @@ class CellSwapResourceTest : IntegrationTestBase() {
 
   @Test
   fun `prefers prison-api's location over the derived one`() {
-    // A prison whose CSWAP location is not described the way we assumed.
+    // Now that we send the key, prison-api should always echo it back. This is the guard that keeps
+    // our record honest if it ever reports something else.
     prisonApi.stubMoveToCellSwap(BOOKING_ID, assignedLivingUnitDesc = "MDI-CSWAP-2")
 
     postSwap().expectStatus().isCreated
@@ -142,7 +140,7 @@ class CellSwapResourceTest : IntegrationTestBase() {
   }
 
   @Test
-  fun `a prison with no cell swap location is not reported as cell not available`() {
+  fun `a prison with no usable cell swap location is not reported as cell not available`() {
     prisonApi.stubMoveToCellSwapFails(
       BOOKING_ID,
       status = 404,
@@ -161,8 +159,8 @@ class CellSwapResourceTest : IntegrationTestBase() {
 
   @Test
   fun `a record open in P-NOMIS surfaces as 423`() {
-    // Defensive: prison-api hardcodes lockTimeout=false on this endpoint so it cannot currently
-    // return 423, but the mapping must be right for when the swap moves onto the living-unit call.
+    // Reachable since MAPA-316: the swap goes through the living-unit call with lockTimeout=true,
+    // where it used to block on a record open in P-NOMIS rather than returning a clean error.
     prisonApi.stubMoveToCellSwapFails(BOOKING_ID, status = 423)
 
     postSwap()
