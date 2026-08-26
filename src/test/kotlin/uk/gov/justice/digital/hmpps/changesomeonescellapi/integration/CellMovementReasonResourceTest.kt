@@ -11,7 +11,6 @@ import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.C
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.CaseNotesApiMockServer.Companion.CASE_NOTE_UUID
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.HmppsAuthApiExtension.Companion.hmppsAuth
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.PrisonerSearchExtension.Companion.prisonerSearch
-import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.WhereaboutsApiExtension.Companion.whereaboutsApi
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.jpa.CellMovementEntity
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.jpa.CellMovementNomisEntity
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.jpa.CellMovementStatus
@@ -61,6 +60,7 @@ class CellMovementReasonResourceTest : IntegrationTestBase() {
   fun `returns 404 when nothing is recorded against this bed assignment`() {
     // The common case rather than an edge one: most bed assignments in NOMIS were never made
     // through DPS at all. Whereabouts returned 404 here too, and prisoner-profile tolerates it.
+    // Now that the read-through has gone (MAPA-282) this is decided entirely on our own tables.
     get()
       .expectStatus().isNotFound
       .expectBody()
@@ -183,37 +183,11 @@ class CellMovementReasonResourceTest : IntegrationTestBase() {
   }
 
   @Test
-  fun `migrates a movement from whereabouts on first read`() {
-    // Nothing on our side at all: the movement still lives only in whereabouts. This is the
-    // transitional path that makes the cutover need no outage - found, grabbed, migrated, served.
-    whereaboutsApi.stubGetCellMoveReason(BOOKING_ID, BED_ASSIGNMENT_SEQUENCE, LEGACY_CASE_NOTE_ID)
-    prisonerSearch.stubGetPrisonerByBookingId(BOOKING_ID, PRISONER_NUMBER)
-    caseNotesApi.stubGetCaseNote(PRISONER_NUMBER, LEGACY_CASE_NOTE_ID.toString(), subType = "BEH", text = COMMENT)
-
-    get()
-      .expectStatus().isOk
-      .expectBody()
-      .jsonPath("$.source").isEqualTo("MIGRATED_FROM_WHEREABOUTS")
-      .jsonPath("$.prisonerNumber").isEqualTo(PRISONER_NUMBER)
-      .jsonPath("$.reasonCode").isEqualTo("BEH")
-      .jsonPath("$.commentText").isEqualTo(COMMENT)
-
-    // Migrated, not just proxied: the row is now ours, fully enriched, and the next read will not
-    // go near whereabouts.
-    val row = cellMovementNomisRepository.findAll().single()
-    org.assertj.core.api.Assertions.assertThat(row.caseNoteLegacyId).isEqualTo(LEGACY_CASE_NOTE_ID)
-    org.assertj.core.api.Assertions.assertThat(row.enrichedAt).isNotNull()
-
-    get().expectStatus().isOk
-    whereaboutsApi.verify(1, getRequestedFor(urlPathEqualTo(WHEREABOUTS_PATH)))
-  }
-
-  @Test
   fun `keeps the link even when it cannot be enriched yet`() {
-    // Fetched from whereabouts, but the booking is no longer the prisoner's current one so the
-    // prisoner number cannot be resolved at read time. The link must survive regardless - the
-    // backfill closes it with a one-off prison-api lookup.
-    whereaboutsApi.stubGetCellMoveReason(BOOKING_ID, BED_ASSIGNMENT_SEQUENCE, LEGACY_CASE_NOTE_ID)
+    // The row exists but the booking is no longer the prisoner's current one, so the prisoner number
+    // cannot be resolved at read time. The link must survive regardless - the backfill closes it with
+    // a one-off prison-api lookup.
+    cellMovementNomisRepository.save(aMigratedMove())
     prisonerSearch.stubGetPrisonerByBookingIdNotFound()
 
     get()
@@ -224,15 +198,6 @@ class CellMovementReasonResourceTest : IntegrationTestBase() {
 
     val row = cellMovementNomisRepository.findAll().single()
     org.assertj.core.api.Assertions.assertThat(row.enrichedAt).isNull()
-  }
-
-  @Test
-  fun `whereabouts being down is an error, not a not-found`() {
-    // Until the backfill has swept the table, whereabouts being unreachable means we genuinely do
-    // not know whether the movement exists. A 404 would assert that it does not.
-    whereaboutsApi.stubCellMoveReasonFails(BOOKING_ID, BED_ASSIGNMENT_SEQUENCE)
-
-    get().expectStatus().is5xxServerError
   }
 
   @Test
@@ -356,7 +321,6 @@ class CellMovementReasonResourceTest : IntegrationTestBase() {
     const val BED_ASSIGNMENT_SEQUENCE = 3
     const val LEGACY_CASE_NOTE_ID = 1234567L
     const val COMMENT = "Moved following an altercation on the wing"
-    const val WHEREABOUTS_PATH = "/cell/cell-move-reason/booking/1200866/bed-assignment-sequence/3"
     val NOW: LocalDateTime = LocalDateTime.now(clock)
   }
 }

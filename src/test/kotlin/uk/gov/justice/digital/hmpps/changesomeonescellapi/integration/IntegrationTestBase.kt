@@ -21,7 +21,6 @@ import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.P
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.PrisonApiExtension.Companion.prisonApi
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.PrisonerSearchExtension
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.PrisonerSearchExtension.Companion.prisonerSearch
-import uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock.WhereaboutsApiExtension
 import uk.gov.justice.hmpps.test.kotlin.auth.JwtAuthorisationHelper
 import java.time.Clock
 
@@ -31,7 +30,6 @@ import java.time.Clock
   PrisonApiExtension::class,
   CaseNotesApiExtension::class,
   PrisonerSearchExtension::class,
-  WhereaboutsApiExtension::class,
 )
 @SpringBootTest(webEnvironment = RANDOM_PORT)
 @ActiveProfiles("test")

@@ -116,8 +116,11 @@ preprod 3,481,920, prod 3,516,520 - and the source table was re-counted afterwar
 moved, proving nothing appeared below the cursor mid-run. The `/link-sweep` endpoint and
 whereabouts' `/cell/cell-move-reasons` export that fed it were both removed with MAPA-282.
 
-Nothing further is needed from whereabouts. The enrichment pass below reads case notes through the
-`case_note_legacy_id` the sweep already copied across.
+Nothing further is needed from whereabouts, and nothing here calls it any more. The read-through
+that fetched an unmigrated movement on first read went with MAPA-282 once hmpps-prisoner-profile
+reached production, taking `WhereaboutsApiClient`, its web client and `WHEREABOUTS_API_URL` with it -
+this service now has no whereabouts dependency at all. The enrichment pass below reads case notes
+through the `case_note_legacy_id` the sweep already copied across.
 
 ### Enrichment
 

@@ -21,7 +21,6 @@ class WebClientConfiguration(
   @param:Value("\${prison-api.url}") val prisonApiBaseUri: String,
   @param:Value("\${case-notes-api.url}") val caseNotesApiBaseUri: String,
   @param:Value("\${prisoner-search.url}") val prisonerSearchBaseUri: String,
-  @param:Value("\${whereabouts-api.url}") val whereaboutsApiBaseUri: String,
   @param:Value("\${locations-inside-prison-api.url}") val locationsInsidePrisonApiBaseUri: String,
   @param:Value("\${api.health-timeout:2s}") val healthTimeout: Duration,
   @param:Value("\${api.timeout:20s}") val timeout: Duration,
@@ -142,20 +141,4 @@ class WebClientConfiguration(
 
   @Bean
   fun locationsInsidePrisonApiHealthWebClient(builder: WebClient.Builder): WebClient = builder.healthWebClient(locationsInsidePrisonApiBaseUri, healthTimeout)
-
-  // whereabouts-api backs the transitional read-through for movements not yet migrated. There is
-  // deliberately NO health web client and no HealthPingCheck for it: whereabouts is being
-  // decommissioned, and a /health dependency on it would fail our deployments the day it is
-  // switched off. This bean and the whereabouts-api.url property are deleted with MAPA-282.
-  @Bean
-  @RequestScope(proxyMode = ScopedProxyMode.INTERFACES)
-  fun whereaboutsApiWebClient(
-    authorizedClientManager: OAuth2AuthorizedClientManager,
-    builder: WebClient.Builder,
-  ): WebClient = builder.authorisedWebClient(
-    authorizedClientManager,
-    registrationId = SYSTEM_USERNAME,
-    url = whereaboutsApiBaseUri,
-    timeout,
-  )
 }

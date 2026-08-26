@@ -164,9 +164,9 @@ class CellMovementResource(
       "here, so it is answered in one call with nothing downstream. " +
       "Movements migrated from whereabouts carry only a case note reference, so their explanation, " +
       "reason code and timestamp are resolved from that case note - once, on first read, and kept. " +
-      "A movement not yet migrated at all is fetched from whereabouts on first read and migrated as it " +
-      "is served, which is what lets consumers switch to this endpoint before the one-off backfill has " +
-      "run, with no outage and no data left behind. Fields that cannot be resolved are null - check " +
+      "Every movement whereabouts ever held has been migrated - the sweep reconciled against its own " +
+      "count - so a bed assignment found here is answered from this service alone and one that is not " +
+      "is a genuine 404. Fields that cannot be resolved are null - check " +
       "`source` rather than inferring from which fields are null. " +
       "Keyed by booking id because that is how NOMIS keys a bed assignment and how the migrated data " +
       "was keyed - it is not a booking id this service would otherwise accept, and this is the one " +

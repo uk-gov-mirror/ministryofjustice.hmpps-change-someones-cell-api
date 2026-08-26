@@ -1,8 +1,6 @@
 package uk.gov.justice.digital.hmpps.changesomeonescellapi.service
 
-import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import uk.gov.justice.digital.hmpps.changesomeonescellapi.client.WhereaboutsApiClient
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.config.CellMovementReasonNotFoundException
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.CellMovementReason
 import uk.gov.justice.digital.hmpps.changesomeonescellapi.dto.CellMovementSource
@@ -14,22 +12,18 @@ import uk.gov.justice.digital.hmpps.changesomeonescellapi.jpa.repository.CellMov
 import kotlin.jvm.optionals.getOrNull
 
 /**
- * Serves "what happened" for a cell move, across the movements this service records, the ones
- * already migrated from whereabouts-api, and - the transitional case - the ones still only in
- * whereabouts.
+ * Serves "what happened" for a cell move, across the movements this service records and the ones
+ * migrated from whereabouts-api. Callers get one endpoint and do not have to know which side a
+ * movement came from.
  *
- * Callers get one endpoint and do not have to know which side a movement came from. That is the
- * point: hmpps-prisoner-profile currently makes two calls per row of the location history page -
- * whereabouts for a case note id, then case-notes for its text - and the migration would otherwise
- * mean it needed a third path for old data.
- *
- * The transitional case is what makes the cutover need no outage and no big-bang. A movement not
- * found on our side is fetched from whereabouts on first read, persisted, enriched from its case
- * note, and served - so from the moment prisoner-profile switches to this endpoint, every movement
- * it asks about migrates itself. The one-off backfill then sweeps the rows nobody asked about, and
- * once the counts reconcile, whereabouts' table can be dropped. Migrate-on-read alone would never
- * converge (unread rows would sit in whereabouts forever); backfill alone would need the sweep
- * finished before the switchover. Together, neither has to wait for the other.
+ * **The transitional read-through to whereabouts has gone (MAPA-282).** While the migration was in
+ * flight, a movement found on neither table was fetched from whereabouts on first read, persisted
+ * and served, so the cutover needed no outage: every movement prisoner-profile asked about migrated
+ * itself while the one-off backfill swept the rest. Both halves are now finished - the link sweep
+ * reconciled against whereabouts' own `count(*)` in every environment (3,516,520 rows in
+ * production) and hmpps-prisoner-profile reads from here - so every movement whereabouts ever knew
+ * about is already in [CellMovementNomisEntity]. A key missing from both tables is now genuinely
+ * not found rather than possibly-elsewhere.
  *
  * Not `@Transactional` at class level: reads that learn something persist it as they go, and each
  * persistence is its own small write - the same each-step-commits reasoning as CellMovementService.
@@ -39,7 +33,6 @@ class CellMovementReasonService(
   private val cellMovementRepository: CellMovementRepository,
   private val cellMovementNomisRepository: CellMovementNomisRepository,
   private val enricher: CellMovementNomisEnricher,
-  private val whereaboutsApiClient: WhereaboutsApiClient,
 ) {
 
   fun findByBedAssignment(bookingId: Long, bedAssignmentSequence: Int): CellMovementReason {
@@ -47,36 +40,11 @@ class CellMovementReasonService(
       .findFirstByBookingIdAndBedAssignmentSequenceOrderByOccurredAtDesc(bookingId, bedAssignmentSequence)
       ?.let { return it.toReason() }
 
-    cellMovementNomisRepository
+    return cellMovementNomisRepository
       .findById(CellMovementNomisId(bookingId, bedAssignmentSequence))
       .getOrNull()
-      ?.let { return enricher.enrichIfNeeded(it).toReason() }
-
-    return readThroughFromWhereabouts(bookingId, bedAssignmentSequence)?.toReason()
+      ?.let { enricher.enrichIfNeeded(it).toReason() }
       ?: throw CellMovementReasonNotFoundException(bookingId, bedAssignmentSequence)
-  }
-
-  /**
-   * The transitional path: the movement exists only in whereabouts, so fetch the link, keep it,
-   * enrich it, and serve it. The row persists even when enrichment cannot complete, so the fact
-   * that the movement exists is never lost - the backfill or a later read finishes the job.
-   *
-   * A whereabouts failure other than 404 propagates as an error rather than being softened into
-   * "not found": until the backfill has run, whereabouts being down means we genuinely do not know
-   * whether the movement exists, and a 404 here would assert that it does not.
-   */
-  private fun readThroughFromWhereabouts(bookingId: Long, bedAssignmentSequence: Int): CellMovementNomisEntity? {
-    val link = whereaboutsApiClient.getCellMoveReason(bookingId, bedAssignmentSequence) ?: return null
-
-    log.info("Migrating cell move reason for booking {} sequence {} on first read", bookingId, bedAssignmentSequence)
-    val row = cellMovementNomisRepository.saveAndFlush(
-      CellMovementNomisEntity(
-        bookingId = link.bookingId,
-        bedAssignmentSequence = link.bedAssignmentsSequence,
-        caseNoteLegacyId = link.caseNoteId,
-      ),
-    )
-    return enricher.enrichIfNeeded(row)
   }
 
   /** Everything is on the row. No downstream call, whatever the status of the movement. */
@@ -115,8 +83,4 @@ class CellMovementReasonService(
     // cell move - but "in practice" is not something to assert on a prisoner's record.
     movementType = null,
   )
-
-  private companion object {
-    private val log = LoggerFactory.getLogger(this::class.java)
-  }
 }
