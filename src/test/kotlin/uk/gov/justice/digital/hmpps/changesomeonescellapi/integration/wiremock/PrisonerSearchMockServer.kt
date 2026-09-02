@@ -3,7 +3,6 @@ package uk.gov.justice.digital.hmpps.changesomeonescellapi.integration.wiremock
 import com.github.tomakehurst.wiremock.WireMockServer
 import com.github.tomakehurst.wiremock.client.WireMock.aResponse
 import com.github.tomakehurst.wiremock.client.WireMock.get
-import com.github.tomakehurst.wiremock.client.WireMock.post
 import com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo
 import org.junit.jupiter.api.extension.AfterAllCallback
 import org.junit.jupiter.api.extension.BeforeAllCallback
@@ -99,77 +98,6 @@ class PrisonerSearchMockServer : WireMockServer(WIREMOCK_PORT) {
               }
             """.trimIndent(),
           )
-          .withStatus(200),
-      ),
-    )
-  }
-
-  /**
-   * The reverse lookup used to recover a prisoner number for a movement migrated from whereabouts,
-   * which was keyed by booking id only.
-   */
-  fun stubGetPrisonerByBookingId(bookingId: Long, prisonerNumber: String, prisonId: String = "MDI") {
-    stubFor(
-      post(urlPathEqualTo("/prisoner-search/booking-ids")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody(
-            """
-              [
-                {
-                  "prisonerNumber": "$prisonerNumber",
-                  "bookingId": "$bookingId",
-                  "prisonId": "$prisonId",
-                  "cellLocation": "1-1-001",
-                  "inOutStatus": "IN",
-                  "status": "ACTIVE IN"
-                }
-              ]
-            """.trimIndent(),
-          )
-          .withStatus(200),
-      ),
-    )
-  }
-
-  /**
-   * The batched form the backfill uses: whatever booking ids are asked for, only [prisoners]
-   * (bookingId to prisonerNumber) come back - bookings the index no longer knows are simply
-   * absent, as in the real service.
-   */
-  fun stubGetPrisonersByBookingIds(vararg prisoners: Pair<Long, String>) {
-    val body = prisoners.joinToString(",\n") { (bookingId, prisonerNumber) ->
-      """
-        {
-          "prisonerNumber": "$prisonerNumber",
-          "bookingId": "$bookingId",
-          "prisonId": "MDI",
-          "cellLocation": "1-1-001",
-          "inOutStatus": "IN",
-          "status": "ACTIVE IN"
-        }
-      """.trimIndent()
-    }
-    stubFor(
-      post(urlPathEqualTo("/prisoner-search/booking-ids")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody("[$body]")
-          .withStatus(200),
-      ),
-    )
-  }
-
-  /**
-   * No match. What prisoner-search returns for a booking that is no longer the prisoner's current
-   * one - anyone released and recalled since the move - which is an empty list, not a 404.
-   */
-  fun stubGetPrisonerByBookingIdNotFound() {
-    stubFor(
-      post(urlPathEqualTo("/prisoner-search/booking-ids")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody("[]")
           .withStatus(200),
       ),
     )

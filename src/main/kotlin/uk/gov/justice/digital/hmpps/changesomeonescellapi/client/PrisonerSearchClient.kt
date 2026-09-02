@@ -32,41 +32,6 @@ class PrisonerSearchClient(
   } catch (e: WebClientResponseException) {
     if (e.statusCode == HttpStatus.NOT_FOUND) null else throw e
   }
-
-  /**
-   * The reverse lookup: which prisoner does this booking belong to?
-   *
-   * Needed only for movements migrated from whereabouts. CELL_MOVE_REASON was keyed by booking id
-   * and held no prisoner number, but case-notes will not serve a case note without one, so the
-   * number has to be recovered before the explanation can be read back.
-   *
-   * **This resolves current bookings only.** prisoner-search indexes a prisoner once, against the
-   * booking they are on now, so a migrated row for someone's earlier booking - anyone released and
-   * recalled since the move - will not match and this returns null. The read path accepts that and
-   * serves the movement without its explanation; the one-off backfill closes the gap with
-   * prison-api's booking endpoint, which does resolve historic bookings - a lookup deliberately
-   * kept out of the read path (see PrisonApiClient.getBooking).
-   *
-   * Requires ROLE_PRISONER_SEARCH or ROLE_GLOBAL_SEARCH. Note that ROLE_PRISONER_SEARCH__PRISONER__RO
-   * is *not* accepted on this endpoint, though it is on `GET /prisoner/{prisonerNumber}`.
-   */
-  // A booking belongs to exactly one prisoner, so this is at most one result. firstOrNull rather
-  // than single, because an unknown booking id is a normal empty list, not an error.
-  fun getPrisonerByBookingId(bookingId: Long): PrisonerSearchPrisoner? = getPrisonersByBookingIds(listOf(bookingId)).firstOrNull()
-
-  /**
-   * The same reverse lookup for a whole batch, which is how the backfill's enrichment pass avoids
-   * one search call per row. Bookings the index no longer knows are simply absent from the result,
-   * so the returned list can be shorter than the request.
-   */
-  fun getPrisonersByBookingIds(bookingIds: Collection<Long>): List<PrisonerSearchPrisoner> = webClient
-    .post()
-    .uri("/prisoner-search/booking-ids")
-    .bodyValue(mapOf("bookingIds" to bookingIds))
-    .retrieve()
-    .bodyToMono<List<PrisonerSearchPrisoner>>()
-    .block()
-    .orEmpty()
 }
 
 @JsonIgnoreProperties(ignoreUnknown = true)

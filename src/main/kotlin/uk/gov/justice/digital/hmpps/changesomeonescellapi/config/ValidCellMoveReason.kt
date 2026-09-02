@@ -23,8 +23,8 @@ import kotlin.reflect.KClass
  *
  * Deliberately applied to **one field only**, `CellMovementRequest.reasonCode`. Historic codes must
  * keep flowing everywhere else:
- *  - the whereabouts backfill writes `reasonCode` onto the entity, never through a request DTO, so
- *    a migrated 2019 move carrying a retired code is untouched by this;
+ *  - the whereabouts backfill wrote `reasonCode` straight onto the migrated rows, never through a
+ *    request DTO, so a migrated 2019 move carrying a retired code is untouched by this;
  *  - the read DTOs keep `reasonCode` as a `String`, so serving a retired code cannot fail;
  *  - there is no database constraint, which would have applied retroactively to migrated rows.
  *

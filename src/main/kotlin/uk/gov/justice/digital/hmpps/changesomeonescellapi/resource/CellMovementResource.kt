@@ -162,8 +162,9 @@ class CellMovementResource(
       "Replaces the two hops this needed before: whereabouts-api for a case note id, then " +
       "offender-case-notes for its text. For a movement this service recorded the explanation is held " +
       "here, so it is answered in one call with nothing downstream. " +
-      "Movements migrated from whereabouts carry only a case note reference, so their explanation, " +
-      "reason code and timestamp are resolved from that case note - once, on first read, and kept. " +
+      "Movements migrated from whereabouts were resolved by the completed backfill - explanation, " +
+      "reason code and timestamp from the case note whereabouts recorded - and are served from this " +
+      "service alone as well. " +
       "Every movement whereabouts ever held has been migrated - the sweep reconciled against its own " +
       "count - so a bed assignment found here is answered from this service alone and one that is not " +
       "is a genuine 404. Fields that cannot be resolved are null - check " +

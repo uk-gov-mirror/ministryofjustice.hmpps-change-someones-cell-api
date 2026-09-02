@@ -71,65 +71,6 @@ class CaseNotesApiMockServer : WireMockServer(WIREMOCK_PORT) {
   }
 
   /**
-   * Reading a case note back by its deprecated numeric legacy id, which is the only identifier a
-   * movement migrated from whereabouts has. case-notes accepts either form on this path.
-   */
-  fun stubGetCaseNote(
-    prisonerNumber: String,
-    caseNoteId: String,
-    caseNoteUuid: String = CASE_NOTE_UUID,
-    subType: String = "ADM",
-    text: String = "Moved following an altercation on the wing",
-  ) {
-    stubFor(
-      get(urlPathEqualTo("/case-notes/$prisonerNumber/$caseNoteId")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody(
-            """
-              {
-                "caseNoteId": "$caseNoteUuid",
-                "offenderIdentifier": "$prisonerNumber",
-                "legacyId": $caseNoteId,
-                "type": "MOVED_CELL",
-                "subType": "$subType",
-                "text": "$text",
-                "authorName": "Jane Smith",
-                "creationDateTime": "2026-08-01T10:00:00",
-                "occurrenceDateTime": "2026-08-01T09:55:00"
-              }
-            """.trimIndent(),
-          )
-          .withStatus(200),
-      ),
-    )
-  }
-
-  /** The migrated link points at a case note that no longer exists - deleted or amended away. */
-  fun stubGetCaseNoteNotFound(prisonerNumber: String, caseNoteId: String) {
-    stubFor(
-      get(urlPathEqualTo("/case-notes/$prisonerNumber/$caseNoteId")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody("""{"status":404,"userMessage":"Case note $caseNoteId not found"}""")
-          .withStatus(404),
-      ),
-    )
-  }
-
-  /** case-notes is down. The read must still answer with what we hold. */
-  fun stubGetCaseNoteFails(prisonerNumber: String, caseNoteId: String, status: Int = 500) {
-    stubFor(
-      get(urlPathEqualTo("/case-notes/$prisonerNumber/$caseNoteId")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody("""{"status":$status,"userMessage":"Unexpected error"}""")
-          .withStatus(status),
-      ),
-    )
-  }
-
-  /**
    * A failing create. 403 is the realistic case: MOVED_CELL is a sync-to-nomis type, which
    * case-notes refuses to write without a real NOMIS user.
    */
