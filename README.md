@@ -25,7 +25,6 @@ Consumers:
 |---|---|
 | `ROLE_CELL_MOVEMENTS__RO` | Read cell movements |
 | `ROLE_CELL_MOVEMENTS__RW` | Record a cell movement |
-| `ROLE_CELL_MOVEMENTS__SYNC__RW` | NOMIS sync and migration |
 
 Every endpoint must carry `@PreAuthorize`; `ResourceSecurityTest` fails the build otherwise.
 Note whereabouts required no role at all for a cell move, so this is a deliberate tightening.
@@ -106,55 +105,12 @@ docker build --build-arg GIT_REF=21345 --build-arg GIT_BRANCH=bob --build-arg BU
 docker run -e HMPPS_AUTH_URL="https://sign-in-dev.hmpps.service.justice.gov.uk/auth" <sha from step 3>
 ```
 
-## One-off backfill of whereabouts CELL_MOVE_REASON (MAPA-304)
+## The whereabouts CELL_MOVE_REASON migration is complete
 
-### The link sweep is complete
-
-Every row of whereabouts-api's `CELL_MOVE_REASON` is in `cell_movement_nomis`. The sweep
-reconciled against whereabouts' own `select count(*)` in all three environments - dev 1,460,
-preprod 3,481,920, prod 3,516,520 - and the source table was re-counted afterwards and had not
-moved, proving nothing appeared below the cursor mid-run. The `/link-sweep` endpoint and
-whereabouts' `/cell/cell-move-reasons` export that fed it were both removed with MAPA-282.
-
-Nothing further is needed from whereabouts, and nothing here calls it any more. The read-through
-that fetched an unmigrated movement on first read went with MAPA-282 once hmpps-prisoner-profile
-reached production, taking `WhereaboutsApiClient`, its web client and `WHEREABOUTS_API_URL` with it -
-this service now has no whereabouts dependency at all. The enrichment pass below reads case notes
-through the `case_note_legacy_id` the sweep already copied across.
-
-### Enrichment
-
-`/migration/cell-move-reasons/enrich` resolves each migrated row's case note - reason code,
-explanation, timestamp - onto it, once. Operator-driven and chunked: each call does a bounded
-amount of work and returns a cursor, and the loop below - with its `sleep` - is both the scheduler
-and the rate limit on case-notes. Idempotent, so a timed-out call, a crash or a repeat costs
-nothing; re-run from the last cursor, or from the start, and rows already enriched are skipped.
-
-Sizing: one case-notes GET per unenriched row, sequentially. In prod that is ~3.5M calls at
-roughly 25-50 req/s, so 20-40 hours. Agree it with the offender-case-notes team before running.
-
-Prerequisites: a client-credentials token with `ROLE_CELL_MOVEMENTS__SYNC__RW`, and
-`ROLE_VIEW_PRISONER_DATA` on this service's own client for the prison-api historic-booking
-fallback.
-
-```bash
-API=https://change-someones-cell-api-dev.hmpps.service.justice.gov.uk
-TOKEN=... # client credentials grant
-
-CURSOR="lastBookingId=0&lastBedAssignmentSequence=0"
-while :; do
-  R=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" "$API/migration/cell-move-reasons/enrich?$CURSOR&batchSize=50")
-  echo "$R"
-  [ "$(jq -r .complete <<<"$R")" = true ] && break
-  CURSOR="lastBookingId=$(jq -r .nextCursor.lastBookingId <<<"$R")&lastBedAssignmentSequence=$(jq -r .nextCursor.lastBedAssignmentSequence <<<"$R")"
-  sleep 1
-done
-
-curl -s -H "Authorization: Bearer $TOKEN" "$API/migration/cell-move-reasons/status" | jq .
-```
-
-A long run needs its token refreshed - it expires well inside the wall clock above.
-
-Record `sampleUnresolvedBookingIds` - bookings neither prisoner-search nor prison-api can resolve -
-on the ticket: that is the "explicitly accounted for" list. These endpoints are deleted once
-enrichment has run to completion.
+Every row of whereabouts-api's `CELL_MOVE_REASON` is in `cell_movement_nomis`, reconciled against
+whereabouts' own `select count(*)` in every environment (prod 3,516,520), and each row's reason
+code, explanation, prisoner number and timestamp were resolved onto it on 2026-09-02. The counts
+are on MAPA-275. The sweep, the read-through and the enrichment endpoints that did this have all
+been removed (MAPA-282, MAPA-304, MAPA-342, MAPA-343): the table is read as it stands and nothing
+here writes to it or calls whereabouts. The handful of rows no source could resolve carry only their
+`case_note_legacy_id`.

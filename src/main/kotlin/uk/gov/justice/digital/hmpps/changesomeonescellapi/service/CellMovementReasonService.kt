@@ -16,23 +16,18 @@ import kotlin.jvm.optionals.getOrNull
  * migrated from whereabouts-api. Callers get one endpoint and do not have to know which side a
  * movement came from.
  *
- * **The transitional read-through to whereabouts has gone (MAPA-282).** While the migration was in
- * flight, a movement found on neither table was fetched from whereabouts on first read, persisted
- * and served, so the cutover needed no outage: every movement prisoner-profile asked about migrated
- * itself while the one-off backfill swept the rest. Both halves are now finished - the link sweep
- * reconciled against whereabouts' own `count(*)` in every environment (3,516,520 rows in
- * production) and hmpps-prisoner-profile reads from here - so every movement whereabouts ever knew
- * about is already in [CellMovementNomisEntity]. A key missing from both tables is now genuinely
- * not found rather than possibly-elsewhere.
- *
- * Not `@Transactional` at class level: reads that learn something persist it as they go, and each
- * persistence is its own small write - the same each-step-commits reasoning as CellMovementService.
+ * The migration is finished on both counts. The link sweep reconciled against whereabouts' own
+ * `count(*)` in every environment (3,516,520 rows in production), the backfill then resolved each
+ * row's prisoner number, reason code, explanation and timestamp, and whereabouts' table and `/cell`
+ * endpoints are gone (MAPA-282, MAPA-304, MAPA-342). So this is a pure read of two tables, with
+ * nothing downstream and nothing written: a key missing from both is genuinely not found, and a
+ * migrated row is served exactly as it stands. The few rows the backfill could not resolve - bookings
+ * no source knows - carry their case note legacy id and nothing else.
  */
 @Service
 class CellMovementReasonService(
   private val cellMovementRepository: CellMovementRepository,
   private val cellMovementNomisRepository: CellMovementNomisRepository,
-  private val enricher: CellMovementNomisEnricher,
 ) {
 
   fun findByBedAssignment(bookingId: Long, bedAssignmentSequence: Int): CellMovementReason {
@@ -43,7 +38,7 @@ class CellMovementReasonService(
     return cellMovementNomisRepository
       .findById(CellMovementNomisId(bookingId, bedAssignmentSequence))
       .getOrNull()
-      ?.let { enricher.enrichIfNeeded(it).toReason() }
+      ?.toReason()
       ?: throw CellMovementReasonNotFoundException(bookingId, bedAssignmentSequence)
   }
 

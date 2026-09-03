@@ -14,12 +14,10 @@ import java.util.UUID
  * A cell move reason inherited from whereabouts-api's CELL_MOVE_REASON table, plus what this
  * service has since resolved about it.
  *
- * The first three fields are the link exactly as whereabouts held it, written by the one-off
- * backfill or by the read-through that fetches a movement from whereabouts the first time someone
- * asks. The rest is enrichment resolved from the case note the link points at - the only place the
- * prisoner number, reason code, explanation and timestamp survive, because the source table held
- * none of them. Resolved once and kept, so a migrated movement stops costing two downstream calls
- * on every read, and so the row becomes addressable by prisoner number like a native one.
+ * The first three fields are the link exactly as whereabouts held it, copied by the one-off sweep.
+ * The rest was resolved by the completed backfill from the case note the link points at - the only
+ * place the prisoner number, reason code, explanation and timestamp survived, because the source
+ * table held none of them. Nothing writes here any more: the table is history, read as it stands.
  *
  * New movements go in [CellMovementEntity]; nothing here is ever a movement this service made.
  */
@@ -57,9 +55,8 @@ class CellMovementNomisEntity(
   var occurredAt: LocalDateTime? = null,
 
   /**
-   * When the enrichment was resolved. Null means not yet attempted, or the last attempt failed
-   * transiently and should be retried. Set alongside null note fields means the case note is
-   * definitively gone and there is nothing left to fetch.
+   * When the backfill resolved this row. Null on the handful of rows no source could put a prisoner
+   * number to; set alongside null note fields means the case note was already gone.
    */
   var enrichedAt: LocalDateTime? = null,
 ) {

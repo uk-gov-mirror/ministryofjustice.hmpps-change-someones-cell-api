@@ -134,41 +134,6 @@ class PrisonApiMockServer : WireMockServer(WIREMOCK_PORT) {
   }
 
   /** Any authenticated GET, used to make the client fetch a token so the token request can be asserted. */
-  /** The backfill's historic-booking fallback: `GET /api/bookings/{id}?basicInfo=true`. */
-  fun stubGetBooking(bookingId: Long, offenderNo: String) {
-    stubFor(
-      get(urlPathEqualTo("/api/bookings/$bookingId")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody("""{"bookingId": $bookingId, "offenderNo": "$offenderNo"}""")
-          .withStatus(200),
-      ),
-    )
-  }
-
-  /** NOMIS itself has no such booking. */
-  fun stubGetBookingNotFound(bookingId: Long) {
-    stubFor(
-      get(urlPathEqualTo("/api/bookings/$bookingId")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody("""{"status":404,"userMessage":"Offender booking with id $bookingId not found."}""")
-          .withStatus(404),
-      ),
-    )
-  }
-
-  fun stubGetBookingFails(bookingId: Long, status: Int = 500) {
-    stubFor(
-      get(urlPathEqualTo("/api/bookings/$bookingId")).willReturn(
-        aResponse()
-          .withHeader("Content-Type", "application/json")
-          .withBody("""{"status":$status}""")
-          .withStatus(status),
-      ),
-    )
-  }
-
   fun stubAnyGet(path: String) {
     stubFor(
       get(path).willReturn(

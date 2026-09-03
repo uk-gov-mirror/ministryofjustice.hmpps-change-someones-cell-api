@@ -93,27 +93,6 @@ class PrisonApiClient(
   }
 
   /**
-   * Resolves a booking - including a historic one prisoner-search no longer indexes - to its
-   * prisoner. **Backfill only**: the read path deliberately never calls this, so a NOMIS read
-   * stays out of the serving path (see CellMovementNomisEnricher). Anyone released and recalled
-   * since their move has a new current booking, and only NOMIS still knows who the old one
-   * belonged to.
-   *
-   * Requires ROLE_VIEW_PRISONER_DATA (prison-api's `@VerifyBookingAccess` also accepts
-   * ROLE_GLOBAL_SEARCH). 404 means NOMIS itself has no such booking - the genuine not-found.
-   */
-  fun getBooking(bookingId: Long): OffenderBooking? = try {
-    webClient
-      .get()
-      .uri("/api/bookings/{bookingId}?basicInfo=true", mapOf("bookingId" to bookingId))
-      .retrieve()
-      .bodyToMono<OffenderBooking>()
-      .block()
-  } catch (e: WebClientResponseException) {
-    if (e.statusCode == HttpStatus.NOT_FOUND) null else throw e
-  }
-
-  /**
    * Shared so the two calls cannot drift. Both now go through the same endpoint with
    * `lockTimeout=true`, so a record open in P-NOMIS is a 423 on a swap as well as on an ordinary
    * move - it used to block instead, because the old swap endpoint hardcoded no lock timeout.
@@ -128,12 +107,6 @@ class PrisonApiClient(
     }
   }
 }
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class OffenderBooking(
-  val bookingId: Long,
-  val offenderNo: String? = null,
-)
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class CellMoveResult(

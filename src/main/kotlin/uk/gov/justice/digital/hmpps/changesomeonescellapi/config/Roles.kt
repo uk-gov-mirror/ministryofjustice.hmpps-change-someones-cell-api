@@ -13,7 +13,4 @@ object Roles {
 
   /** Record a cell movement. */
   const val CELL_MOVEMENTS_RW = "ROLE_CELL_MOVEMENTS__RW"
-
-  /** Reserved for the NOMIS sync and migration endpoints in phase 3. */
-  const val CELL_MOVEMENTS_SYNC_RW = "ROLE_CELL_MOVEMENTS__SYNC__RW"
 }
